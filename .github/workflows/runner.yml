@@ -26,6 +26,56 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Run command
+        id: run_cmd
         env:
           PYTHONPATH: .
         run: ${{ github.event.inputs.cmd }}
+
+      - name: Report status to ARTGEN Brain
+        if: always()
+        env:
+          APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
+          APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
+          CMD_OUTCOME: ${{ steps.run_cmd.outcome }}
+          CMD_INPUT: ${{ github.event.inputs.cmd }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request, urllib.error
+
+          url = os.environ.get("APPS_SCRIPT_URL", "").strip()
+          if not url:
+              print("Webhook skipped: APPS_SCRIPT_URL secret is not set")
+              raise SystemExit(0)
+
+          payload = {
+              "token": os.environ.get("APPS_SCRIPT_TOKEN", ""),
+              "source": "runner-demo",
+              "status": os.environ.get("CMD_OUTCOME", "unknown"),
+              "message": "cmd='%s' run=%s" % (
+                  os.environ.get("CMD_INPUT", ""),
+                  os.environ.get("RUN_URL", ""),
+              ),
+          }
+
+          req = urllib.request.Request(
+              url,
+              data=json.dumps(payload).encode("utf-8"),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+
+          try:
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  body = resp.read().decode("utf-8", "replace")
+                  print("Webhook HTTP status:", resp.status)
+                  print("Webhook response:", body[:500])
+          except urllib.error.HTTPError as err:
+              body = err.read().decode("utf-8", "replace")
+              print("Webhook HTTP status:", err.code)
+              print("Webhook response:", body[:500])
+              raise
+          except Exception as err:
+              print("Webhook request failed:", type(err).__name__, str(err))
+              raise
+          PY
